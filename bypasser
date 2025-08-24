@@ -1,0 +1,528 @@
+-- Services
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local HttpService = game:GetService("HttpService")
+local Clipboard = setclipboard or writeclipboard
+
+-- === Отдельный ScreenGui для уведомлений (всегда активен) ===
+local notificationGui = player:FindFirstChild("WordBypasserNotifications")
+if not notificationGui then
+    notificationGui = Instance.new("ScreenGui")
+    notificationGui.Name = "WordBypasserNotifications"
+    notificationGui.ResetOnSpawn = false
+    notificationGui.Parent = player:WaitForChild("PlayerGui")
+end
+
+-- === Одно уведомление (перезаписывается) ===
+local notificationLabel = notificationGui:FindFirstChild("ActiveNotification")
+
+if not notificationLabel then
+    notificationLabel = Instance.new("TextLabel")
+    notificationLabel.Name = "ActiveNotification"
+    notificationLabel.Size = UDim2.new(0, 400, 0, 60)
+    notificationLabel.Position = UDim2.new(0.5, -200, 0.1, 0)
+    notificationLabel.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+    notificationLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    notificationLabel.Font = Enum.Font.Gotham
+    notificationLabel.TextSize = 20
+    notificationLabel.BorderSizePixel = 0
+    notificationLabel.BackgroundTransparency = 0.7
+    notificationLabel.ZIndex = 10
+    notificationLabel.Visible = false
+    notificationLabel.Parent = notificationGui
+
+    -- Углы
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 10)
+    corner.Parent = notificationLabel
+end
+
+-- === Хранение текущего потока уведомления ===
+local activeNotificationThread = nil
+
+-- === Функция уведомлений (только одно!) ===
+local function showNotification(text, duration)
+    duration = duration or 2
+
+    -- Отменяем предыдущее уведомление
+    if activeNotificationThread then
+        task.cancel(activeNotificationThread)
+    end
+
+    -- Обновляем текст и показываем
+    notificationLabel.Text = text
+    notificationLabel.Visible = true
+
+    -- Запускаем новое
+    activeNotificationThread = task.delay(duration, function()
+        if notificationLabel and notificationLabel.Parent then
+            notificationLabel.Visible = false
+        end
+        activeNotificationThread = nil
+    end)
+end
+
+-- === Дефолтные замены ===
+local lowerReplace = {
+    ["х"] = "x", ["с"] = "c", ["о"] = "o",
+    ["р"] = "p", ["у"] = "y", ["е"] = "e"
+}
+
+local upperReplace = {
+    ["С"] = "C", ["В"] = "B", ["М"] = "M", 
+    ["З"] = "3", ["Р"] = "P", ["Н"] = "H",
+    ["О"] = "O", ["Т"] = "T", ["А"] = "A"
+}
+
+-- === Настройки темы ===
+local DEFAULT_SETTINGS = {
+    theme = "dark" -- "dark" или "light"
+}
+
+-- Храним настройки в папке у игрока
+local dataFolder = player:FindFirstChild("WordBypasserData") or Instance.new("Folder")
+dataFolder.Name = "WordBypasserData"
+dataFolder.Parent = player
+
+local settingsValue = dataFolder:FindFirstChild("Settings") or Instance.new("StringValue")
+settingsValue.Name = "Settings"
+settingsValue.Parent = dataFolder
+
+-- Загрузка настроек
+local function loadSettings()
+    if not settingsValue.Value or settingsValue.Value == "" then
+        local json = HttpService:JSONEncode(DEFAULT_SETTINGS)
+        settingsValue.Value = json
+        return DEFAULT_SETTINGS
+    end
+
+    local success, data = pcall(HttpService.JSONDecode, HttpService, settingsValue.Value)
+    if success and type(data) == "table" and (data.theme == "dark" or data.theme == "light") then
+        return {
+            theme = data.theme
+        }
+    else
+        settingsValue.Value = HttpService:JSONEncode(DEFAULT_SETTINGS)
+        return DEFAULT_SETTINGS
+    end
+end
+
+-- Сохранение настроек
+local function saveSettings(theme)
+    local data = { theme = theme }
+    local success, json = pcall(HttpService.JSONEncode, HttpService, data)
+    if success then
+        settingsValue.Value = json
+    end
+end
+
+-- Загружаем настройки
+local savedSettings = loadSettings()
+local currentTheme = savedSettings.theme
+
+-- === Создание GUI ===
+local gui = Instance.new("ScreenGui")
+gui.Name = "WordBypasser"
+gui.ResetOnSpawn = false
+gui.Enabled = true
+gui.Parent = player:WaitForChild("PlayerGui")
+
+local mainFrame = Instance.new("Frame")
+mainFrame.Name = "MainFrame"
+mainFrame.Size = UDim2.new(0, 600, 0, 420)
+mainFrame.Position = UDim2.new(0.5, -300, 0.5, -210)
+mainFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+mainFrame.BorderSizePixel = 0
+mainFrame.ClipsDescendants = true
+mainFrame.Parent = gui
+
+-- Утилита: закругление
+local function createCorner(parent)
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 16)
+    corner.Parent = parent
+    return corner
+end
+
+-- Тень
+local shadow = Instance.new("ImageLabel")
+shadow.Name = "Shadow"
+shadow.Image = "rbxassetid://1316045217"
+shadow.ImageColor3 = Color3.new(0, 0, 0)
+shadow.ImageTransparency = 0.85
+shadow.ScaleType = Enum.ScaleType.Slice
+shadow.SliceCenter = Rect.new(10, 10, 118, 118)
+shadow.Size = UDim2.new(1, 40, 1, 40)
+shadow.Position = UDim2.new(0, -20, 0, -20)
+shadow.BackgroundTransparency = 1
+shadow.ZIndex = -1
+shadow.Parent = mainFrame
+
+-- === Заголовок (для перемещения всего окна) ===
+local titleBar = Instance.new("Frame")
+titleBar.Name = "TitleBar"
+titleBar.Size = UDim2.new(1, 0, 0, 60)
+titleBar.Position = UDim2.new(0, 0, 0, 0)
+titleBar.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+titleBar.BorderSizePixel = 0
+titleBar.Parent = mainFrame
+createCorner(titleBar)
+
+-- Иконка
+local icon = Instance.new("ImageLabel")
+icon.Name = "Icon"
+icon.Image = "rbxassetid://3926305904"
+icon.ImageRectOffset = Vector2.new(644, 204)
+icon.ImageRectSize = Vector2.new(36, 36)
+icon.Size = UDim2.new(0, 40, 0, 40)
+icon.Position = UDim2.new(0.02, 0, 0.5, -20)
+icon.BackgroundTransparency = 1
+icon.Parent = titleBar
+
+-- Название
+local title = Instance.new("TextLabel")
+title.Name = "Title"
+title.Text = "WORD BYPASSER"
+title.Size = UDim2.new(0.7, 0, 1, 0)
+title.Position = UDim2.new(0.1, 0, 0, 0)
+title.BackgroundTransparency = 1
+title.Font = Enum.Font.GothamBold
+title.TextSize = 32
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.Parent = titleBar
+
+-- Кнопка закрытия
+local closeButton = Instance.new("TextButton")
+closeButton.Name = "CloseButton"
+closeButton.Text = "×"
+closeButton.Font = Enum.Font.SourceSans
+closeButton.TextSize = 40
+closeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+closeButton.Size = UDim2.new(0, 40, 0, 40)
+closeButton.Position = UDim2.new(1, -50, 0.5, -20)
+closeButton.BackgroundColor3 = Color3.fromRGB(220, 60, 60)
+closeButton.BorderSizePixel = 0
+closeButton.Parent = titleBar
+createCorner(closeButton)
+
+-- Кнопка "-" (сворачивает)
+local minimizeButton = Instance.new("TextButton")
+minimizeButton.Name = "MinimizeButton"
+minimizeButton.Text = "–"
+minimizeButton.Font = Enum.Font.SourceSans
+minimizeButton.TextSize = 32
+minimizeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+minimizeButton.Size = UDim2.new(0, 40, 0, 40)
+minimizeButton.Position = UDim2.new(1, -100, 0.5, -20)
+minimizeButton.BackgroundColor3 = Color3.fromRGB(70, 70, 100)
+minimizeButton.BorderSizePixel = 0
+minimizeButton.Parent = titleBar
+createCorner(minimizeButton)
+
+-- === Основной контент ===
+local mainContent = Instance.new("Frame")
+mainContent.Name = "MainContent"
+mainContent.Size = UDim2.new(1, 0, 1, -60)
+mainContent.Position = UDim2.new(0, 0, 0, 60)
+mainContent.BackgroundTransparency = 1
+mainContent.Parent = mainFrame
+
+-- === Поле ввода ===
+local inputBox = Instance.new("TextBox")
+inputBox.Name = "InputBox"
+inputBox.PlaceholderText = ""
+inputBox.Text = ""
+inputBox.Size = UDim2.new(0.9, 0, 0, 60)
+inputBox.Position = UDim2.new(0.05, 0, 0, 20)
+inputBox.Font = Enum.Font.Gotham
+inputBox.TextSize = 20
+inputBox.ClearTextOnFocus = false
+inputBox.TextXAlignment = Enum.TextXAlignment.Left
+inputBox.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+inputBox.TextColor3 = Color3.fromRGB(220, 220, 220)
+inputBox.Parent = mainContent
+createCorner(inputBox)
+Instance.new("UIPadding").PaddingLeft = UDim.new(0, 15)
+Instance.new("UIPadding").Parent = inputBox
+
+-- === Кнопка байпаса ===
+local bypassButton = Instance.new("TextButton")
+bypassButton.Name = "BypassButton"
+bypassButton.Text = "BYPASS TEXT"
+bypassButton.Size = UDim2.new(0.9, 0, 0, 60)
+bypassButton.Position = UDim2.new(0.05, 0, 0, 90)
+bypassButton.Font = Enum.Font.GothamBold
+bypassButton.TextSize = 24
+bypassButton.BackgroundColor3 = Color3.fromRGB(90, 70, 200)
+bypassButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+bypassButton.BorderSizePixel = 0
+bypassButton.Parent = mainContent
+createCorner(bypassButton)
+
+-- === Поле вывода ===
+local outputBox = Instance.new("TextBox")
+outputBox.Name = "OutputBox"
+outputBox.PlaceholderText = ""
+outputBox.Text = ""
+outputBox.Size = UDim2.new(0.9, 0, 0, 60)
+outputBox.Position = UDim2.new(0.05, 0, 0, 160)
+outputBox.Font = Enum.Font.Gotham
+outputBox.TextSize = 20
+outputBox.TextXAlignment = Enum.TextXAlignment.Left
+outputBox.TextEditable = false
+outputBox.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+outputBox.TextColor3 = Color3.fromRGB(180, 240, 150)
+outputBox.Parent = mainContent
+createCorner(outputBox)
+Instance.new("UIPadding").PaddingLeft = UDim.new(0, 15)
+Instance.new("UIPadding").Parent = outputBox
+
+-- === Кнопки действий ===
+local actionFrame = Instance.new("Frame")
+actionFrame.Name = "ActionFrame"
+actionFrame.Size = UDim2.new(0.9, 0, 0, 60)
+actionFrame.Position = UDim2.new(0.05, 0, 0, 230)
+actionFrame.BackgroundTransparency = 1
+actionFrame.Parent = mainContent
+
+local copyButton = Instance.new("TextButton")
+copyButton.Name = "CopyButton"
+copyButton.Text = "COPY RESULT"
+copyButton.Size = UDim2.new(0.48, 0, 1, 0)
+copyButton.Position = UDim2.new(0, 0, 0, 0)
+copyButton.Font = Enum.Font.GothamBold
+copyButton.TextSize = 20
+copyButton.BackgroundColor3 = Color3.fromRGB(60, 180, 100)
+copyButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+copyButton.BorderSizePixel = 0
+copyButton.Parent = actionFrame
+createCorner(copyButton)
+
+local sendButton = Instance.new("TextButton")
+sendButton.Name = "SendButton"
+sendButton.Text = "SEND TO CHAT"
+sendButton.Size = UDim2.new(0.48, 0, 1, 0)
+sendButton.Position = UDim2.new(0.52, 0, 0, 0)
+sendButton.Font = Enum.Font.GothamBold
+sendButton.TextSize = 20
+sendButton.BackgroundColor3 = Color3.fromRGB(70, 130, 230)
+sendButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+sendButton.BorderSizePixel = 0
+sendButton.Parent = actionFrame
+createCorner(sendButton)
+
+-- === Настройка темы ===
+local themeFrame = Instance.new("Frame")
+themeFrame.Name = "ThemeFrame"
+themeFrame.Size = UDim2.new(0.9, 0, 0, 60)
+themeFrame.Position = UDim2.new(0.05, 0, 0, 300)
+themeFrame.BackgroundTransparency = 1
+themeFrame.Parent = mainContent
+
+local themeLabel = Instance.new("TextLabel")
+themeLabel.Name = "ThemeLabel"
+themeLabel.Text = "ТЕМА:"
+themeLabel.Size = UDim2.new(0.4, 0, 1, 0)
+themeLabel.Position = UDim2.new(0, 0, 0, 0)
+themeLabel.BackgroundTransparency = 1
+themeLabel.Font = Enum.Font.GothamBold
+themeLabel.TextSize = 20
+themeLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+themeLabel.Parent = themeFrame
+
+local themeButton = Instance.new("TextButton")
+themeButton.Name = "ThemeButton"
+themeButton.Text = currentTheme == "dark" and "ТЁМНАЯ" or "СВЕТЛАЯ"
+themeButton.Size = UDim2.new(0.5, 0, 1, 0)
+themeButton.Position = UDim2.new(0.5, 0, 0, 0)
+themeButton.Font = Enum.Font.GothamBold
+themeButton.TextSize = 20
+themeButton.BackgroundColor3 = Color3.fromRGB(90, 170, 90)
+themeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+themeButton.BorderSizePixel = 0
+themeButton.Parent = themeFrame
+createCorner(themeButton)
+
+-- === Применение темы ===
+local function applyTheme(theme)
+    if theme == "dark" then
+        mainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+        titleBar.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+        inputBox.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+        inputBox.TextColor3 = Color3.fromRGB(220, 220, 220)
+        outputBox.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+        outputBox.TextColor3 = Color3.fromRGB(180, 240, 150)
+        bypassButton.BackgroundColor3 = Color3.fromRGB(90, 70, 200)
+        copyButton.BackgroundColor3 = Color3.fromRGB(60, 180, 100)
+        sendButton.BackgroundColor3 = Color3.fromRGB(70, 130, 230)
+        themeButton.BackgroundColor3 = Color3.fromRGB(90, 170, 90)
+        themeLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    else
+        mainFrame.BackgroundColor3 = Color3.fromRGB(240, 240, 240)
+        titleBar.BackgroundColor3 = Color3.fromRGB(220, 220, 220)
+        inputBox.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        inputBox.TextColor3 = Color3.fromRGB(0, 0, 0)
+        outputBox.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        outputBox.TextColor3 = Color3.fromRGB(0, 150, 0)
+        bypassButton.BackgroundColor3 = Color3.fromRGB(100, 100, 220)
+        copyButton.BackgroundColor3 = Color3.fromRGB(0, 120, 200)
+        sendButton.BackgroundColor3 = Color3.fromRGB(0, 100, 180)
+        themeButton.BackgroundColor3 = Color3.fromRGB(50, 150, 50)
+        themeLabel.TextColor3 = Color3.fromRGB(0, 0, 0)
+    end
+end
+
+applyTheme(currentTheme)
+
+-- === Анимации кнопок ===
+local function animateButton(button, hoverColor)
+    button.MouseEnter:Connect(function()
+        TweenService:Create(button, TweenInfo.new(0.15), {BackgroundColor3 = hoverColor}):Play()
+    end)
+    button.MouseLeave:Connect(function()
+        TweenService:Create(button, TweenInfo.new(0.2), {BackgroundColor3 = button.BackgroundColor3}):Play()
+    end)
+end
+
+animateButton(bypassButton, Color3.fromRGB(110, 90, 220))
+animateButton(copyButton, Color3.fromRGB(80, 200, 120))
+animateButton(sendButton, Color3.fromRGB(90, 150, 250))
+animateButton(closeButton, Color3.fromRGB(240, 80, 80))
+animateButton(minimizeButton, Color3.fromRGB(90, 90, 130))
+animateButton(themeButton, Color3.fromRGB(110, 190, 110))
+
+-- === Перемещение ВСЕГО окна (исправлено!) ===
+local function makeDraggable(dragInputObject, frameToMove)
+    dragInputObject.Active = true
+    dragInputObject.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            local dragStart = input.Position
+            local startPos = frameToMove.Position
+
+            local inputChanged = nil
+            inputChanged = UserInputService.InputChanged:Connect(function(input)
+                if input.UserInputType == Enum.UserInputType.MouseMovement then
+                    local delta = input.Position - dragStart
+                    frameToMove.Position = UDim2.new(
+                        startPos.X.Scale,
+                        startPos.X.Offset + delta.X,
+                        startPos.Y.Scale,
+                        startPos.Y.Offset + delta.Y
+                    )
+                end
+            end)
+
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    inputChanged:Disconnect()
+                end
+            end)
+        end
+    end)
+end
+
+makeDraggable(titleBar, mainFrame)
+
+-- === Обработчики событий ===
+closeButton.MouseButton1Click:Connect(function()
+    if activeNotificationThread then
+        task.cancel(activeNotificationThread)
+    end
+    gui:Destroy()
+    notificationGui:Destroy()
+end)
+
+minimizeButton.MouseButton1Click:Connect(function()
+    gui.Enabled = false
+    showNotification("Меню скрыто. Нажмите RAlt, чтобы открыть", 3)
+end)
+
+bypassButton.MouseButton1Click:Connect(function()
+    local input = inputBox.Text
+    if #input == 0 then
+        outputBox.Text = ""
+        return
+    end
+
+    local result = ""
+    for _, codepoint in utf8.codes(input) do
+        local char = utf8.char(codepoint)
+        local replaced = false
+
+        for rus, eng in pairs(upperReplace) do
+            if char == rus then
+                result = result .. eng
+                replaced = true
+                break
+            end
+        end
+
+        if not replaced then
+            for rus, eng in pairs(lowerReplace) do
+                if char == rus then
+                    result = result .. eng
+                    replaced = true
+                    break
+                end
+            end
+        end
+
+        if not replaced then
+            result = result .. char
+        end
+    end
+    outputBox.Text = result
+end)
+
+inputBox.FocusLost:Connect(function(enterPressed)
+    if enterPressed then
+        bypassButton.MouseButton1Click:Fire()
+    end
+end)
+
+copyButton.MouseButton1Click:Connect(function()
+    local text = outputBox.Text
+    if text == "" then return end
+    Clipboard(text)
+    copyButton.Text = "✔ COPIED!"
+    copyButton.BackgroundColor3 = Color3.fromRGB(80, 200, 120)
+    task.delay(1.5, function()
+        if copyButton and copyButton.Parent then
+            copyButton.Text = "COPY RESULT"
+            copyButton.BackgroundColor3 = Color3.fromRGB(60, 180, 100)
+        end
+    end)
+end)
+
+sendButton.MouseButton1Click:Connect(function()
+    local text = outputBox.Text
+    if text == "" then
+        showNotification("Сначала сгенерируйте текст!", 2)
+        return
+    end
+    pcall(function()
+        game:GetService("TextChatService").TextChannels.RBXGeneral:SendAsync(text)
+        showNotification("Сообщение отправлено!", 1)
+    end)
+end)
+
+themeButton.MouseButton1Click:Connect(function()
+    currentTheme = currentTheme == "dark" and "light" or "dark"
+    themeButton.Text = currentTheme == "dark" and "ТЁМНАЯ" or "СВЕТЛАЯ"
+    applyTheme(currentTheme)
+    saveSettings(currentTheme)
+    showNotification("Тема изменена!", 1)
+end)
+
+UserInputService.InputBegan:Connect(function(input)
+    if input.KeyCode == Enum.KeyCode.RightAlt then
+        gui.Enabled = not gui.Enabled
+        showNotification(gui.Enabled and "Меню открыто" or "Меню скрыто. Нажмите RAlt, чтобы открыть", 3)
+    end
+end)
+
+-- === Уведомление при запуске ===
+showNotification("WordBypasser загружен!", 2)
